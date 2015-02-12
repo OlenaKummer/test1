@@ -1,0 +1,198 @@
+= Bahnnetz
+:neo4j-version: 2.0.0
+:author: Olena Kummer
+:tags: domain:infrastructure, use-case:bahnnetz
+
+
+*Table of Contents*
+
+* *Introduction*
+** <<introduction_to_problem, Introduction to Problem>>
+* *Solution*
+** <<how_graph_databases_can_help, How Graph Databases Can Help>>
+* *Data Model*
+** <<bank_fraud_data_model, Graph Data Model>>
+* *Database Setup*
+** <<sample_data_set, Sample Data Set>>
+* *Cypher Queries*
+** <<entity_link_analysis, Entity Link Analysis>>
+** <<find_account_holders_who_share_more_than_one_piece_of_legitimate_contact_information, Find account holders who share more than one piece of legitimate contact information>>
+** <<determine_the_financial_risk_of_a_possible_fraud_ring , Determine the financial risk of a possible fraud ring>>
+
+'''
+
+== Introduction to Problem
+
+'''
+
+
+=== How Graph Databases Can Help
+
+Graphdatenbanken kommen insbesondere dann in Frage, wenn eine Modellierung in Graphenform möglich ist. Die Kernbestandteile von Graphdatenbanken sind Knoten und Kanten, die sich jeweils durch Properties näher beschreiben lassen. Die Knoten erhalten Eigenschaften eines Objekts, die Kanten zeigen Beziehungen zwischen den Objekten. Graphdatenbanken sind spezialisiert, vernetzte Daten abzuspeichern und schnell innerhalb dieser Graphenstruktur zu navigieren. 
+
+'''
+
+== Graph Data Model
+
+Das Schienennetz kann als ein Graphenmodell dargestellt werden. Das Gleisnetz auf Basis der DfA-Daten wird als Gleis- und Weichen-Knoten dargestellt, die den Daten entsprechend verbunden sind.
+image::https://raw.github.com/neo4j-contrib/gists/master/other/images/BankFraud-1.png[Schiennetzmodell]
+
+Die Eigenschaften für den Gleis- und Weichenknoten sind die Attribute Anfangskilome-ter, Gleisstrangkategorie, Endkilometer, Länge, X,Y,Z – Koordinaten, GS_Status. 
+
+
+'''
+
+== Sample Data Set
+
+//setup
+[source,cypher]
+----
+
+// Create account holders
+CREATE (accountHolder1:AccountHolder { 
+       		FirstName: "John", 
+       		LastName: "Doe", 
+       		UniqueId: "JohnDoe" }) 
+
+CREATE (accountHolder2:AccountHolder { 
+			FirstName: "Jane", 
+			LastName: "Appleseed", 
+			UniqueId: "JaneAppleseed" }) 
+
+CREATE (accountHolder3:AccountHolder { 
+			FirstName: "Matt", 
+			LastName: "Smith", 
+			UniqueId: "MattSmith" }) 
+
+// Create Address
+CREATE (address1:Address { 
+			Street: "123 NW 1st Street", 
+			City: "San Francisco", 
+			State: "California", 
+			ZipCode: "94101" })
+
+// Connect 3 account holders to 1 address
+CREATE (accountHolder1)-[:HAS_ADDRESS]->(address1), 
+       (accountHolder2)-[:HAS_ADDRESS]->(address1), 
+       (accountHolder3)-[:HAS_ADDRESS]->(address1)
+
+// Create Phone Number
+CREATE (phoneNumber1:PhoneNumber { PhoneNumber: "555-555-5555" })
+
+// Connect 2 account holders to 1 phone number
+CREATE (accountHolder1)-[:HAS_PHONENUMBER]->(phoneNumber1), 
+       (accountHolder2)-[:HAS_PHONENUMBER]->(phoneNumber1)
+
+// Create SSN
+CREATE (ssn1:SSN { SSN: "241-23-1234" })
+
+// Connect 2 account holders to 1 SSN
+CREATE (accountHolder2)-[:HAS_SSN]->(ssn1), 
+       (accountHolder3)-[:HAS_SSN]->(ssn1)
+
+// Create SSN and connect 1 account holder
+CREATE (ssn2:SSN { SSN: "241-23-4567" })<-[:HAS_SSN]-(accountHolder1)
+
+// Create Credit Card and connect 1 account holder
+CREATE (creditCard1:CreditCard { 
+			AccountNumber: "1234567890123456", 
+			Limit: 5000, Balance: 1442.23, 
+			ExpirationDate: "01-20", 
+			SecurityCode: "123" })<-[:HAS_CREDITCARD]-(accountHolder1)
+
+// Create Bank Account and connect 1 account holder
+CREATE (bankAccount1:BankAccount { 
+			AccountNumber: "2345678901234567", 
+			Balance: 7054.43 })<-[:HAS_BANKACCOUNT]-(accountHolder1)
+
+// Create Credit Card and connect 1 account holder
+CREATE (creditCard2:CreditCard { 
+			AccountNumber: "1234567890123456", 
+			Limit: 4000, Balance: 2345.56, 
+			ExpirationDate: "02-20", 
+			SecurityCode: "456" })<-[:HAS_CREDITCARD]-(accountHolder2)
+
+// Create Bank Account and connect 1 account holder
+CREATE (bankAccount2:BankAccount { 
+			AccountNumber: "3456789012345678", 
+			Balance: 4231.12 })<-[:HAS_BANKACCOUNT]-(accountHolder2)
+
+// Create Unsecured Loan and connect 1 account holder
+CREATE (unsecuredLoan2:UnsecuredLoan { 
+			AccountNumber: "4567890123456789-0", 
+			Balance: 9045.53, 
+			APR: .0541, 
+			LoanAmount: 12000.00 })<-[:HAS_UNSECUREDLOAN]-(accountHolder2)
+
+// Create Bank Account and connect 1 account holder
+CREATE (bankAccount3:BankAccount { 
+			AccountNumber: "4567890123456789", 
+			Balance: 12345.45 })<-[:HAS_BANKACCOUNT]-(accountHolder3)
+
+// Create Unsecured Loan and connect 1 account holder
+CREATE (unsecuredLoan3:UnsecuredLoan { 
+			AccountNumber: "5678901234567890-0", 
+			Balance: 16341.95, APR: .0341, 
+			LoanAmount: 22000.00 })<-[:HAS_UNSECUREDLOAN]-(accountHolder3)
+
+// Create Phone Number and connect 1 account holder
+CREATE (phoneNumber2:PhoneNumber { 
+			PhoneNumber: "555-555-1234" })<-[:HAS_PHONENUMBER]-(accountHolder3)
+
+RETURN *
+----
+
+//graph
+
+'''
+
+== Entity Link Analysis
+
+Performing entity link analysis on the above data model is demonstrated below.
+
+==== Find account holders who share more than one piece of legitimate contact information
+
+[source,cypher]
+----
+MATCH 		(accountHolder:AccountHolder)-[]->(contactInformation) 
+WITH 		contactInformation, 
+			count(accountHolder) AS RingSize 
+MATCH 		(contactInformation)<-[]-(accountHolder) 
+WITH 		collect(accountHolder.UniqueId) AS AccountHolders, 
+			contactInformation, RingSize
+WHERE 		RingSize > 1 
+RETURN 		AccountHolders AS FraudRing, 
+			labels(contactInformation) AS ContactType, 
+			RingSize
+ORDER BY 	RingSize DESC
+----
+
+//output
+//table
+
+==== Determine the financial risk of a possible fraud ring
+
+[source,cypher]
+----
+MATCH 		(accountHolder:AccountHolder)-[]->(contactInformation) 
+WITH 		contactInformation, 
+			count(accountHolder) AS RingSize 
+MATCH 		(contactInformation)<-[]-(accountHolder), 
+			(accountHolder)-[r:HAS_CREDITCARD|HAS_UNSECUREDLOAN]->(unsecuredAccount)
+WITH 		collect(DISTINCT accountHolder.UniqueId) AS AccountHolders, 
+			contactInformation, RingSize,
+			SUM(CASE type(r)
+				WHEN 'HAS_CREDITCARD' THEN unsecuredAccount.Limit
+				WHEN 'HAS_UNSECUREDLOAN' THEN unsecuredAccount.Balance
+				ELSE 0
+			END) as FinancialRisk
+WHERE 		RingSize > 1
+RETURN 		AccountHolders AS FraudRing, 
+			labels(contactInformation) AS ContactType, 
+			RingSize, 
+			round(FinancialRisk) as FinancialRisk
+ORDER BY 	FinancialRisk DESC
+----
+
+//output
+//table
